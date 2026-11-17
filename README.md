@@ -33,11 +33,11 @@ DeepSeek extracts structured fields (`informed`, categories, exact quotations, m
 ```mermaid
 flowchart LR
     DS[DeepSeek V4 Flash] --> LA[LangChain Agent]
-    LA --> T1[list_documents]
-    LA --> T2[read_document]
-    LA -. available tool .-> T3[sql_query]
+    LA -. available, not called .-> T1[list_documents]
+    LA -. available, not called .-> T2[read_document]
     LA --> T4[interview]
-    T3 --> PY[Python / SQL deterministic processing]
+    PY[Python deterministic processing] --> T3[sql_query]
+    T3 --> PY
     PY --> P5[Point 5: 4-quarter average margin]
     PY --> P6[Point 6: 8-quarter OLS slope]
     T4 --> P11[Point 11: structured semantic extraction]
@@ -46,7 +46,7 @@ flowchart LR
     P11 --> V
 ```
 
-The model plans and executes the interview tool call for Point 11. Python directly invokes the SQL tool for deterministic Point 5 and Point 6 calculations, then applies their fixed rules. The final result contains three verdicts and an evidence summary.
+The four company tools are available to the per-company agent, but the current execution path uses the model-directed `interview` tool for Point 11. `sql_query` is invoked directly by Python for Point 5 and Point 6; `list_documents` and `read_document` are not invoked in this workflow. Python performs all financial arithmetic and applies the fixed rules. The final result contains three verdicts and an evidence summary.
 
 ```mermaid
 flowchart TD
@@ -87,7 +87,7 @@ Balanced Accuracy is `(PASS Accuracy + FAIL Accuracy) / 2`; the overall score is
 
 AI sycophancy occurs when a model agrees with a convenient interpretation instead of challenging weak evidence. In this project, early semantic classifications treated some statements too conservatively or too generously until the original interview wording and confusion matrices were reviewed. Independent SQL calculations and ground-truth testing were necessary checks.
 
-AI psychosis describes the risk of allowing generated explanations to become accepted as facts through repeated, unsupported assumptions. A plausible-sounding competitive advantage is not enough: the agent must preserve the interview quotation, identify the role, and distinguish meaningful differentiation from generic praise. Human review, deterministic financial rules, structured output validation, and public-test error analysis limit this risk.
+AI psychosis describes the risk of allowing generated explanations to become accepted as facts through repeated, unsupported assumptions. During development, the first Point 11 prompt rejected several valid performance and know-how statements as generic praise. Reviewing the original customer and competitor responses exposed that error, so the prompt and structured fields were revised without making patents or switching costs mandatory. SQL/Python independently checked every margin and slope, while confusion matrices showed where the model was wrong. Preserving quotations, roles, and validated JSON keeps the final decision tied to evidence.
 
 ## 6. Setup and Reproducibility
 
