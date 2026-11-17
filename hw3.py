@@ -57,7 +57,7 @@ def load_env_file(path: Path = Path(".env")) -> None:
 
 # Choose any 3 of the 15 points, e.g. CHOSEN_POINTS = [1, 7, 15]. Your agent
 # gives a PASS or FAIL verdict on these 3 points only, with your own rule for each.
-CHOSEN_POINTS: list[int] = []  ### YOUR CODE HERE
+CHOSEN_POINTS: list[int] = [5, 6, 11]
 
 
 def build_agent() -> Any:
@@ -71,8 +71,12 @@ def build_agent() -> Any:
     from .env. Each company has its own tools (see ``analyze_companies``), so
     you will probably create one tool-calling agent per company there.
     """
-    ### YOUR CODE HERE
-    return None
+    import os
+    from langchain_deepseek import ChatDeepSeek
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        raise RuntimeError("DEEPSEEK_API_KEY is missing; refusing keyword fallback")
+    return ChatDeepSeek(model=MODEL_NAME, temperature=0, api_key=key, base_url="https://api.deepseek.com", max_retries=2, timeout=60)
 
 
 async def analyze_companies(agent: Any, companies: dict[str, list[Any]]) -> dict[str, dict[str, Any]]:
@@ -108,9 +112,67 @@ async def analyze_companies(agent: Any, companies: dict[str, list[Any]]) -> dict
     entry for it: an exception here means no results.csv, which scores zero.
     You may analyse companies in parallel (e.g. ``asyncio.gather``).
     """
-    ### YOUR CODE HERE
     _ = agent
-    return {name: {"points": {}, "summary": ""} for name in companies}
+    async def one(name, tools):
+        list_documents, read_document, sql_query, interview = tools
+        def q(x):
+            try: return sql_query.invoke(x)
+            except Exception as e: return f"SQL error: {e}"
+        def rows(txt):
+            lines=txt.splitlines(); out=[]
+            for line in lines[1:]:
+                if not line or line.startswith("("): continue
+                vals=line.split(" | ")
+                try:
+                    out.append([float(v) if "." in v else (int(v) if v.lstrip("-").isdigit() else v) for v in vals])
+                except Exception:
+                    pass
+            return out
+        try:
+            rev=rows(q("SELECT substr(order_date,1,4)||'Q'||((CAST(substr(order_date,6,2) AS INTEGER)-1)/3+1) q, SUM(amount) revenue FROM orders GROUP BY 1 ORDER BY 1"))
+            cost=rows(q("SELECT substr(month,1,4)||'Q'||((CAST(substr(month,6,2) AS INTEGER)-1)/3+1) q, SUM(cost_of_sales+selling_admin+research_development) cost FROM monthly_costs GROUP BY 1 ORDER BY 1"))
+            med=rows(q("SELECT operating_margin_pct FROM industry_medians WHERE industry=(SELECT industry FROM company)"))[0][0]
+            margins=[(r[1]-c[1])/r[1]*100 for r,c in zip(rev,cost)][-8:]
+            p5="PASS" if sum(margins[-4:])/4 > med else "FAIL"
+            # Point 6: database-only eight-quarter linear trend.
+            # Quarters are sorted chronologically as YYYYQn; use exactly the latest 8.
+            x=list(range(len(margins)))
+            xbar=sum(x)/len(x); ybar=sum(margins)/len(margins)
+            slope=sum((i-xbar)*(v-ybar) for i,v in zip(x,margins))/sum((i-xbar)**2 for i in x)
+            p6="PASS" if slope > 0 else "FAIL"
+            from langchain.agents import create_agent
+            model_agent = create_agent(model=agent, tools=tools, system_prompt=(
+                "Analyze Fisher Point 11 using actual interviews. First call interview(customer, competitive_edge). "
+                "Only if the customer is uninformed, vague, or insufficient, call interview(competitor, competitive_edge). "
+                "Return ONLY valid JSON with fields: informed (boolean), categories (array), evidence (array of exact quotations), "
+                "meaningful_differentiation (boolean), commoditization_or_weakness (boolean), verdict (PASS or FAIL), role (customer or competitor). "
+                "Valid PASS evidence includes product performance or quality, reliability, delivery, installed base, know-how, "
+                "customer dependence, switching costs, loyalty/return, proprietary technology, or difficult-to-replicate capability. "
+                "Do not require patents, metrics, or mechanism detail. A concrete statement that competitors cannot match performance "
+                "is sufficient. Generic praise alone (good company, like products, excellent service) is insufficient. "
+                "Price-only or commodity evidence is FAIL. Preserve exact quotations."))
+            response = await model_agent.ainvoke({"messages":[{"role":"user","content":"Research and classify Point 11. Use the interview tool and return the required JSON."}]})
+            content = response.get("messages", [])[-1].content if isinstance(response, dict) and response.get("messages") else str(response)
+            try:
+                obj=json.loads(content[content.find("{"):content.rfind("}")+1])
+            except Exception as exc:
+                raise RuntimeError(f"Point 11 structured extraction JSON error: {exc}")
+            evidence=obj.get("evidence", [])
+            informed=bool(obj.get("informed")); meaningful=bool(obj.get("meaningful_differentiation"))
+            weak=bool(obj.get("commoditization_or_weakness")); verdict=str(obj.get("verdict", "")).upper()
+            if weak:
+                p11="FAIL"
+            elif informed and meaningful and isinstance(evidence, list) and any(str(x).strip() for x in evidence):
+                p11="PASS"
+            else:
+                p11="FAIL"
+            role=str(obj.get("role", "unknown"))
+            evidence_text=" | ".join(str(x) for x in evidence)[:400]
+            return {"points":{5:p5,6:p6,11:p11},"summary":f"P5 average margin {sum(margins[-4:])/4:.1f}% vs industry {med:.1f}%. P6 8-quarter slope={slope:.4f}. P11 agent role={role}; evidence: {evidence_text}"}
+        except Exception as e:
+            return {"points":{5:"FAIL",6:"FAIL",11:"FAIL"},"summary":f"Analysis error: {e}"}
+    result=await asyncio.gather(*(one(n,t) for n,t in companies.items()))
+    return dict(zip(companies, result))
 
 
 # Everything below is provided runner/scoring code. No edits are needed.

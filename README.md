@@ -1,183 +1,112 @@
-# FTEC5660 Homework 3: Fisher's 15-Point Investment Agent
+# FTEC5660 Homework 3 — Fisher Investment Analysis Agent
 
-Build a LangChain agent that researches a company with tools and applies the
-framework from Philip Fisher's *Common Stocks and Uncommon Profits* (Part One,
-Chapter 3 "What to buy: the fifteen points to look for in a common stock", and
-Chapter 4 "What to buy: applying this to your own needs"). You choose 3 of
-Fisher's 15 points and decide yourself what PASS means for each. For every
-company your agent gives a PASS/FAIL verdict on your 3 points and a short
-summary.
+## 1. Project Overview
 
-The companies are fictional, so the model cannot answer from memory. Unlike a
-pile of reports, the evidence is spread over three sources, and your agent has
-to go and get it with tools, the way Fisher's "scuttlebutt" method sends an
-investor to talk to customers, competitors, suppliers and staff.
+This project applies Philip Fisher's fifteen-point investment framework to fictional companies using database evidence, interviews, Python calculations, LangChain, and DeepSeek V4 Flash. The selected points are **5 (worthwhile profit margin), 6 (maintaining or improving margins), and 11 (advantage over competitors)**.
 
-## Data and tools
+## 2. Homework 3 Solution
 
-`public_test/` has one folder per company. Your code receives four tools per
-company (built by the provided code in `hw3.py`):
+### 2.1 Point 5 — Worthwhile Profit Margin
 
-| Tool | What it gives you |
-| --- | --- |
-| `list_documents()` | the company's six documents and their dates |
-| `read_document(name)` | one document: the 2025 letter to shareholders, four earnings calls (Q3 2025 to Q2 2026) and a news file (July 2025 to July 2026) |
-| `sql_query(query)` | one read-only SQLite query on the company's database; at most 50 rows come back, so use `SUM`, `GROUP BY` and `WHERE` |
-| `interview(role, topic)` | what one person says about the company; at most **10 interviews per company** |
+Operating margin measures the proportion of revenue left after operating costs:
 
-The documents are what management says. Management's own claims (such as "we
-have never cut research" or "our people are our greatest strength") are not
-evidence on their own: check them against the database and the interviews.
+```text
+Operating Margin = (Revenue - Cost of Sales - Selling & Admin - R&D) / Revenue
+```
 
-**Database tables** (amounts in USD thousands; dates `YYYY-MM-DD`, months
-`YYYY-MM`, quarters like `2025Q3`; the fiscal year is the calendar year):
+Revenue is aggregated from `orders`; costs are aggregated by quarter from `monthly_costs`; the benchmark is the company's industry row in `industry_medians`. The latest four complete quarters are averaged. **PASS** requires the average to be strictly greater than the industry median; otherwise the result is **FAIL**.
 
-| Table | Columns |
-| --- | --- |
-| `company` | name, industry |
-| `industry_medians` | industry, revenue_growth_2y_pct, new_product_share_pct, new_product_sales_per_rd, operating_margin_pct (one row per industry; use the row for the company's own industry) |
-| `orders` | order_id, order_date, product, customer, amount, note (about 3,000 to 4,000 orders from January 2023 to June 2026; revenue is the sum of order amounts) |
-| `products` | product, launch_date |
-| `monthly_costs` | month, cost_of_sales, selling_admin, research_development |
-| `quarterly_cash` | quarter, operating_cash_flow, capex, cash_end |
-| `capex_plan` | year, planned_capex (2026 to 2028) |
-| `returns` | month, units_shipped, units_returned |
-| `insider_trades` | trade_date, person, title, side (`buy` or `sell`), shares, price |
+### 2.2 Point 6 — Maintaining or Improving Margins
 
-**Terms used in the data.**
+Point 5 evaluates the level of profitability against peers. Point 6 evaluates direction over time. The latest eight complete quarterly operating margins are sorted chronologically and fitted with an ordinary least squares line against quarter indexes 0 through 7. **PASS** requires a strictly positive slope; zero or negative slope is **FAIL**. This database trend is an observable proxy for maintaining or improving margins; it does not directly reveal management's specific actions.
 
-| Term | Meaning |
-| --- | --- |
-| FY2025 | Fiscal year 2025. Here the fiscal year is the calendar year, so FY2025 is January to December 2025. |
-| Quarter | Three months of the year: Q1 is January to March, Q2 April to June, Q3 July to September and Q4 October to December. The database writes `2025Q3`; the documents write "third quarter 2025". |
-| Amounts | The database is in **USD thousands** (676,100 means US$676.1 million). The documents use USD millions. |
-| Revenue | Money from sales: the sum of `amount` in `orders`. |
-| Cost of sales | The cost of making the products that were sold. |
-| Selling and admin | The cost of selling and of running the company (sales staff, offices, management). |
-| R&D | Research and development spending, mainly on new products. |
-| Operating margin | Operating profit as a share of revenue: (revenue − cost of sales − selling and admin − R&D) ÷ revenue. |
-| Operating cash flow | Cash that the day-to-day business brings in during a quarter. |
-| Cash at the end of a quarter | The cash the company holds on the last day of that quarter (`cash_end`). |
-| Capex | Capital expenditure: spending on factories, machines and other long-term assets. `capex_plan` holds the planned capex for 2026 to 2028. |
-| Return rate | Units returned ÷ units shipped, from the `returns` table. |
-| Industry median | The middle value for companies in the same industry, from `industry_medians`. |
-| Insider | A director or senior manager of the company. `insider_trades` lists the shares they bought (`buy`) or sold (`sell`). |
-| Earnings call | A meeting each quarter where management presents the quarter's results to investors. Each call quotes that quarter's revenue. |
+Evidence comes from `orders` and `monthly_costs`. Python performs aggregation, margin calculations, and regression arithmetic.
 
-**Interviews.** Roles: `customer`, `current_employee`, `former_employee`,
-`competitor`, `supplier`. Topics: `sales_team`, `working_conditions`,
-`top_management`, `decision_making`, `competitive_edge`. Only some people know
-about each topic; the others say they can't comment, and that answer still
-uses up one interview.
+### 2.3 Point 11 — Advantage over Competitors
 
-| Topic | Who knows about it |
-| --- | --- |
-| `sales_team` | customer, competitor |
-| `working_conditions` | current_employee, former_employee |
-| `top_management` | former_employee, supplier |
-| `decision_making` | supplier, customer |
-| `competitive_edge` | competitor, customer |
+Point 11 uses Fisher's scuttlebutt approach. The LangChain agent first asks a customer about `competitive_edge`. If that response is uninformed or insufficient, it asks a competitor, while respecting the ten-interview company limit.
 
-People who know about a topic always agree with each other, so one good answer
-is enough.
+DeepSeek extracts structured fields (`informed`, categories, exact quotations, meaningful differentiation, weakness/commoditization, verdict, and role). Python validates the structure and applies the final rule. Performance, quality, reliability, delivery, installed base, know-how, customer dependence, switching costs, loyalty or customer return, proprietary technology, and difficult-to-replicate capability may support PASS. Generic praise alone, commodity products, price-only competition, no differentiation, or material weakness supports FAIL. Patents and switching costs are not mandatory.
 
-## Choose your 3 points and your rules
+## 3. Agent Architecture
 
-Pick any 3 of Fisher's 15 points and write them in `CHOSEN_POINTS` near the
-top of `hw3.py`, e.g. `CHOSEN_POINTS = [1, 7, 15]`. The full questions are in
-`FISHER_POINTS` in `hw3.py` and in the book.
+```mermaid
+flowchart LR
+    DS[DeepSeek V4 Flash] --> LA[LangChain Agent]
+    LA --> T1[list_documents]
+    LA --> T2[read_document]
+    LA -. available tool .-> T3[sql_query]
+    LA --> T4[interview]
+    T3 --> PY[Python / SQL deterministic processing]
+    PY --> P5[Point 5: 4-quarter average margin]
+    PY --> P6[Point 6: 8-quarter OLS slope]
+    T4 --> P11[Point 11: structured semantic extraction]
+    P5 --> V[Final PASS/FAIL + summary]
+    P6 --> V
+    P11 --> V
+```
 
-| # | Fisher's point | Where the evidence is |
-| --- | --- | --- |
-| 1 | Market potential for sales growth | database |
-| 2 | New products as current lines mature | database |
-| 3 | Effective research and development | database |
-| 4 | Above-average sales organization | interviews (`sales_team`) |
-| 5 | Worthwhile profit margin | database |
-| 6 | Maintaining or improving margins | database |
-| 7 | Labour and personnel relations | interviews (`working_conditions`) |
-| 8 | Executive relations | interviews (`top_management`) |
-| 9 | Depth of management | interviews (`decision_making`) |
-| 10 | Cost analysis and accounting controls | earnings calls, checked against the database |
-| 11 | Advantage over competitors | interviews (`competitive_edge`) |
-| 12 | Long-range outlook on profits | database |
-| 13 | Growth without dilutive equity financing | database |
-| 14 | Management talks freely about troubles | earnings calls, checked against the database |
-| 15 | Management of unquestionable integrity | news file, checked against the database |
+The model plans and executes the interview tool call for Point 11. Python directly invokes the SQL tool for deterministic Point 5 and Point 6 calculations, then applies their fixed rules. The final result contains three verdicts and an evidence summary.
 
-For each of your points, **you design the rule**: which evidence to use, what
-to compute or whom to ask, and where the line between PASS and FAIL lies. PASS
-means the company looks favourable on that point, as Fisher would see it.
+```mermaid
+flowchart TD
+    A[Initialize company tools] --> B[Query orders and monthly_costs]
+    B --> C[Aggregate quarterly revenue and costs]
+    C --> D[Compute operating margins]
+    D --> E[Point 5: latest 4-quarter average > industry median?]
+    D --> F[Point 6: latest 8 quarters, OLS slope > 0?]
+    E --> G[Customer interview: competitive_edge]
+    F --> G
+    G --> H{Customer informed and sufficient?}
+    H -- Yes --> I[DeepSeek structured semantic extraction]
+    H -- No --> J[Competitor interview: competitive_edge]
+    J --> I
+    I --> K{Meaningful advantage and no clear weakness?}
+    K -- Yes --> L[Point 11 PASS]
+    K -- No --> M[Point 11 FAIL]
+    E --> N[Combine Points 5, 6, 11]
+    F --> N
+    L --> N
+    M --> N
+    N --> O[Write results.csv]
+```
 
-We grade your verdicts against our own answer key. It uses one fixed rule per
-point, which we do not publish, and the data never puts a company close to
-the line of that rule, so a sensible reading of Fisher usually gives the same
-answer. **Test your rules on the public answers**:
-`public_test/ground_truth.json` gives the expected verdict on all 15 points
-for each of the 20 public companies, and every point fails in 6 of them. If
-your rule disagrees with the public answers, rethink it.
+## 4. Public Test Results
 
-**Tip: calculate with tools, not in your head.** Do every sum, ratio and
-comparison in SQL or Python, including the number of days between two dates
-(SQLite's `julianday()` gives a date as a number of days).
+Latest production run: **55/60 correct predictions; overall Balanced Accuracy 90.9%**.
 
-## Student task
+| Point | TP | TN | FP | FN | PASS Accuracy | FAIL Accuracy | Balanced Accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 5 | 14 | 6 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| 6 | 11 | 4 | 2 | 3 | 78.6% | 66.7% | 72.6% |
+| 11 | 14 | 6 | 0 | 0 | 100.0% | 100.0% | 100.0% |
 
-Fill in the three places in `hw3.py` marked `### YOUR CODE HERE`. You may add
-imports, constants and helper functions above them, but do not change the
-provided code below them:
+Balanced Accuracy is `(PASS Accuracy + FAIL Accuracy) / 2`; the overall score is the arithmetic mean of the three point Balanced Accuracy values. The five incorrect classifications in the latest run were `aurel_systems`, `bramble_labs`, `juniper_industries`, `lindale_holdings`, and `northwind_group`, all from Point 6's financial trend rule. Point 6 is intentionally database-only and therefore observes margin direction rather than management intent.
 
-- `CHOSEN_POINTS` lists your 3 points.
-- `build_agent()` creates your model and anything else you need once.
-- `analyze_companies(agent, companies)` receives
-  `{company_folder: [list_documents, read_document, sql_query, interview]}`
-  and returns, for every company,
-  `{"points": {1: "PASS", 7: "FAIL", 15: "PASS"}, "summary": "..."}` (here with
-  `CHOSEN_POINTS = [1, 7, 15]`).
+## 5. Task 2 — Reflection on AI Sycophancy and AI Psychosis
 
-Use the course techniques that fit your points: tool use for the database and
-the interviews, planning which interviews to spend, routing each point to the
-right source, prompt chaining, parallel calls, reflection to check your
-answers, or a combination. Your code must read company data **only through
-the four tools**; do not open `company.db` or `interviews.dat` yourself. Do
-not hard-code folder names, company names or the public answers.
+AI sycophancy occurs when a model agrees with a convenient interpretation instead of challenging weak evidence. In this project, early semantic classifications treated some statements too conservatively or too generously until the original interview wording and confusion matrices were reviewed. Independent SQL calculations and ground-truth testing were necessary checks.
 
-## Setup and public test
+AI psychosis describes the risk of allowing generated explanations to become accepted as facts through repeated, unsupported assumptions. A plausible-sounding competitive advantage is not enough: the agent must preserve the interview quotation, identify the role, and distinguish meaningful differentiation from generic praise. Human review, deterministic financial rules, structured output validation, and public-test error analysis limit this risk.
+
+## 6. Setup and Reproducibility
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-echo "DEEPSEEK_API_KEY=your_key_here" > .env
+```
+
+Create `.env` locally:
+
+```text
+DEEPSEEK_API_KEY=your_api_key
+```
+
+Run the public test:
+
+```bash
 python3 hw3.py --data-folder public_test
 ```
 
-Use your own DeepSeek API key (from https://platform.deepseek.com). The
-required model is `deepseek-v4-flash`. We grade with our own key, so never put
-a key in your code; `.env` must stay out of git.
-
-The program creates `results.csv` with the columns `company`, `points`,
-`points_correct`, `point_errors`, `interviews_used` and `summary`, and prints
-the point score on your 3 points (the percentage after "balanced"). The point
-score is the average of two shares: the share of truly passing verdicts that
-you marked PASS and the share of truly failing verdicts that you marked FAIL.
-For example, 90% and 60% give (90% + 60%) / 2 = 75%, and marking every point
-PASS gives (100% + 0%) / 2 = 50%. Once `CHOSEN_POINTS` is set, the starter
-runs before you add any API code (it returns no verdicts, so it scores 0%).
-
-`public_test/ground_truth.json` gives the expected verdicts on all 15 points
-for each public company. Grading uses a private set of about 20 unseen
-companies with the same tools and the same answer key rules, but different
-names and wording, and scores your 3 points only.
-
-## Homework 3 solution:
-> to students: this is your report, see the homework description.
-
-### My 3 points and rules
-> for each point: why you chose it, your PASS rule in one or two sentences, and the evidence it uses. Quote Fisher where it helps.
-
-### Design
-> a visualization of your agent design and one paragraph describing it.
-
-### Results
-> your point score on `public_test`, the companies where your verdicts disagree with the public answers, and why.
+The key must never be committed to GitHub. The runner writes `results.csv` with company verdicts, errors, interview counts, and summaries.
